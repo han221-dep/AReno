@@ -21,7 +21,14 @@ SYSTEM_PROMPT = (
     "deliver every passenger while minimizing wait. Call the dispatch tool with a "
     "string of letters: U move up, D move down, O open the door to let passengers "
     "off and on, C close the door. The door must be open to exchange passengers and "
-    "closed to move. Keep capacity; invalid actions are penalized."
+    "closed to move. Keep capacity; invalid actions are penalized.\n\n"
+    "Plan for the whole episode, not one move. Read the 'pending arrivals: tN:F..->F..' "
+    "list in the Building: passengers only appear on tick tN, so the car must keep "
+    "running until the clock passes the LATEST tN. A serve costs roughly two actions "
+    "(open, then close) per floor, so a complete dispatch usually needs many tens of "
+    "actions -- one short action string that ends before the first arrival can never "
+    "pick anyone up and scores the worst reward. Keep issuing valid U/D/O/C until "
+    "every passenger has arrived and been delivered."
 )
 
 DISPATCH_TOOL = {

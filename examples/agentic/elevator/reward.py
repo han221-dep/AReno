@@ -19,6 +19,7 @@ import game  # noqa: E402
 DELIVERED_VALUE = 1.0
 WAIT_WEIGHT = 0.01
 INVALID_PENALTY = 0.1
+COVERAGE_CAP = 0.3
 
 
 def reward_fn(record: Any) -> float:
@@ -44,7 +45,7 @@ def _scalar_reward(metrics: dict, actions: str, building: dict) -> float:
     agentic examples' failing-score convention. When nobody is delivered the
     score is loosened off the old flat ``-1.0`` floor with a small bounded
     ``coverage`` shaping term: a no-op policy still cannot win, but an episode
-    that ran at least past the first arrival is no longer tied with one that
+    that ran closer to the full arrival horizon is no longer tied with one that
     ended blind before anyone showed up. Group advantage is only non-zero when
     within-group scores differ, and a flat ``-1.0`` for every miss leaves
     GRPO/GSPO with no gradient to start from.
@@ -64,21 +65,25 @@ def _scalar_reward(metrics: dict, actions: str, building: dict) -> float:
 
 
 def _coverage_signal(metrics: dict, building: dict) -> float:
-    """Small cold-start shaping for episodes that delivered no one.
+    """Cold-start shaping for episodes that delivered no one.
 
-    Returns ``0.1`` when the episode ran at least as many ticks as the first
-    scheduled arrival, else ``0.0``. A short blind string that ends before
-    anyone arrives cannot earn it, so the policy is nudged toward longer,
-    time-aware sequences -- the only signal we can read from ``play()``'s final
-    state without instrumenting the engine.
+    A *continuous* credit for how far the episode's clock ran toward the full
+    arrival horizon, scaled to ``[0, COVERAGE_CAP]``. The horizon is the *last*
+    scheduled arrival (not the first): the goal is to keep dispatching until
+    every passenger has shown up, and a sequence that ends before the first
+    arrival can never serve anyone. Unlike a binary threshold, the linear ramp
+    makes two short-but-different sequences compare differently, so the
+    within-group advantage is non-zero even when nobody is delivered --
+    GRPO/GSPO then has a gradient to start from.
     """
 
     arrivals = building.get("arrivals") or []
-    first_arrival_tick = (
-        min(int(e.get("tick", 0)) for e in arrivals) if arrivals else 0
+    last_arrival_tick = (
+        max(int(e.get("tick", 0)) for e in arrivals) if arrivals else 0
     )
+    horizon = max(1, last_arrival_tick + 1)
     n_attempts = int(metrics.get("n_attempts", 0))
-    return 0.1 if n_attempts >= max(1, first_arrival_tick + 1) else 0.0
+    return min(COVERAGE_CAP, COVERAGE_CAP * n_attempts / horizon)
 
 
 def _tool_actions(record: Any) -> str:
