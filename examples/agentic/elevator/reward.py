@@ -29,7 +29,7 @@ def reward_fn(record: Any) -> float:
     actions = _tool_actions(record)
     metrics = _play(building, actions, source)
     source["metrics"] = metrics
-    return _scalar_reward(metrics, actions)
+    return _scalar_reward(metrics, actions, building)
 
 
 def _play(building: dict[str, Any], actions: str, source: dict) -> dict:
@@ -37,12 +37,17 @@ def _play(building: dict[str, Any], actions: str, source: dict) -> dict:
     return game.play(building, actions, max_steps=max_steps)
 
 
-def _scalar_reward(metrics: dict, actions: str) -> float:
+def _scalar_reward(metrics: dict, actions: str, building: dict) -> float:
     """Float reward shaped like delivered passengers minus wait and invalids.
 
     Empty or unparseable action strings map to ``-1.0`` -- mirroring the other
-    agentic examples' failing-score convention -- and an episode that delivered
-    nobody scores below zero so a no-op policy cannot win.
+    agentic examples' failing-score convention. When nobody is delivered the
+    score is loosened off the old flat ``-1.0`` floor with a small bounded
+    ``coverage`` shaping term: a no-op policy still cannot win, but an episode
+    that ran at least past the first arrival is no longer tied with one that
+    ended blind before anyone showed up. Group advantage is only non-zero when
+    within-group scores differ, and a flat ``-1.0`` for every miss leaves
+    GRPO/GSPO with no gradient to start from.
     """
 
     if not actions:
@@ -51,9 +56,29 @@ def _scalar_reward(metrics: dict, actions: str) -> float:
     wait_term = WAIT_WEIGHT * float(metrics["mean_wait"])
     invalid_term = INVALID_PENALTY * float(metrics["invalid_rate"])
     reward = DELIVERED_VALUE * delivered - wait_term - invalid_term
-    if delivered == 0:
-        return min(reward, -1.0)
-    return reward
+    if delivered > 0:
+        return reward
+    coverage = _coverage_signal(metrics, building)
+    shaped = coverage - invalid_term
+    return min(-1.0 + shaped, -0.1)
+
+
+def _coverage_signal(metrics: dict, building: dict) -> float:
+    """Small cold-start shaping for episodes that delivered no one.
+
+    Returns ``0.1`` when the episode ran at least as many ticks as the first
+    scheduled arrival, else ``0.0``. A short blind string that ends before
+    anyone arrives cannot earn it, so the policy is nudged toward longer,
+    time-aware sequences -- the only signal we can read from ``play()``'s final
+    state without instrumenting the engine.
+    """
+
+    arrivals = building.get("arrivals") or []
+    first_arrival_tick = (
+        min(int(e.get("tick", 0)) for e in arrivals) if arrivals else 0
+    )
+    n_attempts = int(metrics.get("n_attempts", 0))
+    return 0.1 if n_attempts >= max(1, first_arrival_tick + 1) else 0.0
 
 
 def _tool_actions(record: Any) -> str:
