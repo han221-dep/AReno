@@ -17,24 +17,24 @@ logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 SYSTEM_PROMPT = (
-    "You are an elevator dispatcher. Call the dispatch tool ONCE with the COMPLETE "
-    "action string for the whole episode and stop.\n\n"
+    "You are dispatching the elevator for THIS building. Read the Building below "
+    "carefully -- its floors, the car position, and every 'pending arrivals "
+    "tN:F..->F..' entry -- then output ONE dispatch action string that moves the car "
+    "to pick up and drop off all of THESE specific passengers. You MUST plan from the "
+    "actual arrivals: which floor each passenger is on, where they want to go, and on "
+    "which tick they appear. Two different buildings must get two different strings; "
+    "copying a fixed string that ignores the arrivals fails.\n\n"
     "Actions (one letter each, concatenated, NO spaces): U move up one floor, D move "
     "down one floor, O open the door (let passengers off then on), C close the door. "
     "Door must be OPEN to exchange passengers, CLOSED to move. Invalid actions (wrong "
     "door state, moving past top/bottom floor) are penalized.\n\n"
-    "LENGTH IS CRITICAL. A correct dispatch for a building with 6 arrivals is about "
-    "40-55 letters, NEVER just 3-6 letters. Two-letter or three-letter answers always "
-    "fail: the car stops before the first passenger even arrives and nobody is "
-    "delivered. Plan the ENTIRE route first -- every pickup and dropoff across all "
-    "floors, from the first arrival tick to the last -- then emit one long string.\n\n"
-    "WORKED EXAMPLE (a different building): the dispatch "
-    "\"UUUUUDDUOCDDDDOCUUUOCUUOCDDOCDDDOCUUUOCUOCUO\" is 44 letters and delivers all "
-    "6 passengers. Mimic this LENGTH and structure, not the short examples below. "
-    "Inside the dispatch tool call, put the real long string for YOUR building.\n\n"
-    "The Building lists 'pending arrivals tN:F..->F..': passengers appear on tick tN. "
-    "The car must keep running until the clock passes the LAST tN AND every passenger "
-    "has been picked up and dropped off. Keep issuing U/D/O/C until done."
+    "LENGTH: a correct dispatch for a building with 6 arrivals is about 40-55 letters, "
+    "NEVER just a few. A normal move-and-serve cycle is: travel U/D to the passenger's "
+    "floor, O to pick up, C, travel to the destination, O to drop off, C. Repeat for "
+    "every passenger; keep the clock running past the last arrival until everyone is "
+    "delivered. Plan the WHOLE route first, then emit it as one long string.\n\n"
+    "The car starts at the floor and door state shown in the Building. Passengers only "
+    "appear when the clock reaches their tick tN, so order pickups by arrival tick."
 )
 
 DISPATCH_TOOL = {
