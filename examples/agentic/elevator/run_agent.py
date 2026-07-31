@@ -17,18 +17,24 @@ logger = logging.getLogger(__name__)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 SYSTEM_PROMPT = (
-    "You are an elevator dispatcher. Pick a sequence of single-letter actions to "
-    "deliver every passenger while minimizing wait. Call the dispatch tool with a "
-    "string of letters: U move up, D move down, O open the door to let passengers "
-    "off and on, C close the door. The door must be open to exchange passengers and "
-    "closed to move. Keep capacity; invalid actions are penalized.\n\n"
-    "Plan for the whole episode, not one move. Read the 'pending arrivals: tN:F..->F..' "
-    "list in the Building: passengers only appear on tick tN, so the car must keep "
-    "running until the clock passes the LATEST tN. A serve costs roughly two actions "
-    "(open, then close) per floor, so a complete dispatch usually needs many tens of "
-    "actions -- one short action string that ends before the first arrival can never "
-    "pick anyone up and scores the worst reward. Keep issuing valid U/D/O/C until "
-    "every passenger has arrived and been delivered."
+    "You are an elevator dispatcher. Call the dispatch tool ONCE with the COMPLETE "
+    "action string for the whole episode and stop.\n\n"
+    "Actions (one letter each, concatenated, NO spaces): U move up one floor, D move "
+    "down one floor, O open the door (let passengers off then on), C close the door. "
+    "Door must be OPEN to exchange passengers, CLOSED to move. Invalid actions (wrong "
+    "door state, moving past top/bottom floor) are penalized.\n\n"
+    "LENGTH IS CRITICAL. A correct dispatch for a building with 6 arrivals is about "
+    "40-55 letters, NEVER just 3-6 letters. Two-letter or three-letter answers always "
+    "fail: the car stops before the first passenger even arrives and nobody is "
+    "delivered. Plan the ENTIRE route first -- every pickup and dropoff across all "
+    "floors, from the first arrival tick to the last -- then emit one long string.\n\n"
+    "WORKED EXAMPLE (a different building): the dispatch "
+    "\"UUUUUDDUOCDDDDOCUUUOCUUOCDDOCDDDOCUUUOCUOCUO\" is 44 letters and delivers all "
+    "6 passengers. Mimic this LENGTH and structure, not the short examples below. "
+    "Inside the dispatch tool call, put the real long string for YOUR building.\n\n"
+    "The Building lists 'pending arrivals tN:F..->F..': passengers appear on tick tN. "
+    "The car must keep running until the clock passes the LAST tN AND every passenger "
+    "has been picked up and dropped off. Keep issuing U/D/O/C until done."
 )
 
 DISPATCH_TOOL = {
@@ -41,7 +47,7 @@ DISPATCH_TOOL = {
             "properties": {
                 "actions": {
                     "type": "string",
-                    "description": "Ordered actions, one letter each from U/D/O/C, e.g. 'OCUUOC'.",
+                    "description": "The COMPLETE action string for the whole episode, one letter each from U/D/O/C concatenated with no spaces. Usually 40-55 letters for a typical building -- a correct dispatch is long, never just a few letters.",
                     "pattern": "^[UDOC]+$",
                 }
             },
