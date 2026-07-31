@@ -260,6 +260,7 @@ def play(
     sequence: str,
     *,
     max_steps: int = DEFAULT_MAX_STEPS,
+    record: bool = False,
 ) -> dict[str, Any]:
     """Replay an action sequence deterministically and return metrics.
 
@@ -268,6 +269,13 @@ def play(
     stop the episode. The episode also stops at ``max_steps`` valid actions or a
     terminal building. The metric dict matches the fields checked by tests and
     the reward function.
+
+    With ``record=True`` the result also carries a ``frames`` list: an initial
+    frame (the cleared state before any action) plus one snapshot per attempted
+    action, so a UI can animate the episode tick by tick. Each frame is
+    ``{"tick", "action", "valid", "state"}`` where ``state`` is an independent
+    :func:`clone_state` copy; recording is opt-in and leaves the default path
+    untouched.
     """
 
     state = clone_state(normalize_building(building))
@@ -280,13 +288,19 @@ def play(
     n_valid = 0
     n_invalid = 0
     terminal = False
+    frames: list[dict[str, Any]] | None = None
+    if record:
+        frames = [{"tick": state["tick"], "action": None, "valid": None, "state": clone_state(state)}]
     for action in sequence:
         if n_valid >= max_steps:
             break
-        if step(state, action, stats):
+        valid = step(state, action, stats)
+        if valid:
             n_valid += 1
         else:
             n_invalid += 1
+        if frames is not None:
+            frames.append({"tick": state["tick"], "action": action, "valid": valid, "state": clone_state(state)})
         if is_terminal(state):
             terminal = True
             break
@@ -295,7 +309,7 @@ def play(
 
     delivered = stats["delivered"]
     counts = n_valid + n_invalid
-    return {
+    result = {
         "state": state,
         "delivered_passengers": delivered,
         "mean_wait": (stats["total_wait"] / delivered) if delivered else 0.0,
@@ -308,6 +322,9 @@ def play(
         "remaining_passengers": remaining_passengers(state),
         "terminal": terminal,
     }
+    if frames is not None:
+        result["frames"] = frames
+    return result
 
 
 def building_to_text(building: dict[str, Any]) -> str:

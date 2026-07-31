@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -210,3 +211,92 @@ def test_elevator_fcfs_baseline_beats_or_matches_random_idle():
     # Reproducible aggregation.
     again = baseline.fcfs_baseline(16, seed=2026, arrivals_per_building=4)
     assert stats == again
+
+
+def test_elevator_play_record_produces_replayable_frames():
+    """record=True yields one snapshot per attempted action plus a head frame,
+    each an independent state copy, without changing the default replay path."""
+
+    game = _load_module("game")
+    building = _building(
+        arrivals=[(0, 0, 3), (0, 2, 1)],
+        floors=4,
+        capacity=2,
+    )
+    actions = game.fcfs_actions(building)
+    assert actions, "FCFS should produce a non-empty dispatch for this building"
+
+    # Default path is untouched: no frames key, same metric fields as before.
+    plain = game.play(building, actions, max_steps=200)
+    assert "frames" not in plain
+
+    recorded = game.play(building, actions, max_steps=200, record=True)
+    frames = recorded["frames"]
+    # Head frame + one per attempted action.
+    assert len(frames) == recorded["n_attempts"] + 1
+    # Head frame precedes every action; ticks strictly increase thereafter.
+    assert frames[0]["action"] is None
+    assert frames[0]["valid"] is None
+    assert frames[0]["tick"] == 0
+    ticks = [f["tick"] for f in frames]
+    assert ticks == sorted(ticks) and len(set(ticks)) == len(ticks)
+    # The per-step actions rejoin the input sequence; each is legal letter.
+    assert "".join(f["action"] for f in frames[1:]) == actions
+    for frame in frames[1:]:
+        assert frame["action"] in game.ACTIONS
+    # The last snapshot matches the terminal state, and snapshots are independent
+    # deep copies: mutating one must not alias the returned terminal state.
+    assert frames[-1]["state"] == recorded["state"]
+    assert frames[-1]["state"] is not recorded["state"]
+    terminal_tick = recorded["state"]["tick"]
+    frames[1]["state"]["tick"] = -1
+    assert recorded["state"]["tick"] == terminal_tick
+
+
+def test_elevator_dashboard_resolves_buildings_and_builds_episodes():
+    """The dashboard resolves a building from the training-data JSONL by prompt_idx
+    and replays a sample; both dataset row shapes are accepted."""
+
+    dashboard = _load_module("dashboard")
+    game = _load_module("game")
+
+    def _write(path, rows, wrap):
+        import json as _json
+        with open(path, "w", encoding="utf-8") as handle:
+            for row in rows:
+                handle.write(_json.dumps({"building": row} if wrap else row) + "\n")
+
+    building = _building(arrivals=[(0, 0, 3), (0, 2, 1)], floors=4, capacity=2)
+    actions = game.fcfs_actions(building)
+    assert actions
+
+    sample = {
+        "kind": "agentic",
+        "step": 7,
+        "prompt_idx": 0,
+        "tool_calls": [{"name": "dispatch", "arguments": {"actions": actions}}],
+        "final_answer": "",
+    }
+
+    with tempfile.TemporaryDirectory() as tmp:
+        raw_path = str(Path(tmp) / "raw.jsonl")
+        wrapped_path = str(Path(tmp) / "wrapped.jsonl")
+        _write(raw_path, [building], wrap=False)
+        _write(wrapped_path, [building], wrap=True)
+
+        for path in (raw_path, wrapped_path):
+            index = dashboard.DatasetIndex(path, strict=False)
+            resolved = index.get(0)
+            assert resolved is not None
+            payload = dashboard._episode_payload(sample, resolved)
+            assert payload is not None and not payload["skipped"]
+            assert len(payload["frames"]) == payload["metrics"]["n_attempts"] + 1
+            assert payload["frame_actions"][0] is None
+
+        # Missing dataset -> no building -> skipped payload.
+        missing = dashboard.DatasetIndex(str(Path(tmp) / "nope.jsonl"), strict=False)
+        assert missing.get(0) is None
+        skipped = dashboard._episode_payload(sample, None)
+        assert skipped is not None and skipped["skipped"] and skipped["reason"] == "no-building"
+
+
